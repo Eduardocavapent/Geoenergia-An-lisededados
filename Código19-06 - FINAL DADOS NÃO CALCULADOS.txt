@@ -1,0 +1,194 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jun 18 17:35:00 2026
+@author: Eduardo Cavalheiro Pentiado
+"""
+
+import pandas as pd
+import os
+
+# =====================================================
+# CONFIGURAÇÕES
+# =====================================================
+
+arquivo_excel = "SINTEF datasheet.xlsx"
+abas = ["Data-3mm", "Data-2mm", "Data-2mm-gas"]
+
+os.makedirs("resultados", exist_ok=True)
+dados_finais = []
+
+# =====================================================
+# PROCESSAMENTO DAS MATRIZES
+# =====================================================
+
+for aba in abas:
+    print(f"Lendo e tratando aba: {aba}")
+    
+    # Força a leitura pulando as 10 primeiras linhas de metadados inúteis
+    # e lê o cabeçalho exatamente na linha 10 (index 10 do Excel bruto)
+    df = pd.read_excel(arquivo_excel, sheet_name=aba, header=10)
+    
+    # Criamos um DataFrame limpo mapeando diretamente pelo índice numérico da coluna (iloc)
+    # Isso blinda contra variações de strings nos cabeçalhos ("Pred" vs "Predicted")
+    dados_aba = pd.DataFrame()
+    
+    # Mapeamento posicional estrito baseado no diagnóstico do terminal:
+    dados_aba["Experimento"] = df.iloc[:, 1]   # Coluna 1: Nome do teste/Amostra
+    dados_aba["Pred_d50_mm"] = df.iloc[:, 2]   # Coluna 2: d50 predito
+    dados_aba["Meas_d50_mm"] = df.iloc[:, 3]   # Coluna 3: d50 medido real
+    dados_aba["IFT_mN_m"]    = df.iloc[:, 4]   # Coluna 4: IFT oil
+    dados_aba["Nozzle_D_m"]  = df.iloc[:, 5]   # Coluna 5: Diâmetro Nozzle
+    dados_aba["Qoil_L_min"]  = df.iloc[:, 6]   # Coluna 6: Flow rate óleo
+    dados_aba["Qgas_L_min"]  = df.iloc[:, 7]   # Coluna 7: Flow rate gás
+    
+    # Identificação do tipo de Nozzle pelo contexto da aba
+    if aba == "Data-3mm":
+        dados_aba["Nozzle_Type"] = "3 mm"
+    elif aba == "Data-2mm":
+        dados_aba["Nozzle_Type"] = "2 mm"
+    elif aba == "Data-2mm-gas":
+        dados_aba["Nozzle_Type"] = "2 mm + gas"
+
+    # =====================================================
+    # FILTRAGEM GEOMÉTRICA DA MATRIZ
+    # =====================================================
+    
+  # 2. Converte d50 para formato numérico antes da filtragem
+    dados_aba["Pred_d50_mm"] = pd.to_numeric(
+    dados_aba["Pred_d50_mm"], 
+    errors="coerce"
+)
+
+    dados_aba["Meas_d50_mm"] = pd.to_numeric(
+    dados_aba["Meas_d50_mm"], 
+    errors="coerce"
+)
+
+# 3. Mantém somente experimentos reais
+    dados_aba = dados_aba.dropna(
+    subset=["Pred_d50_mm", "Meas_d50_mm"]
+)
+
+# 4. Remove valores fisicamente impossíveis
+    dados_aba = dados_aba[
+    (dados_aba["Pred_d50_mm"] > 0) &
+    (dados_aba["Meas_d50_mm"] > 0)
+]
+    # 3. Limpeza de strings e resíduos textuais da coluna Experimento
+    dados_aba["Experimento"] = dados_aba["Experimento"].astype(str).str.strip()
+    dados_aba = dados_aba[(dados_aba["Experimento"] != "") & (dados_aba["Experimento"] != "nan")]
+    dados_aba = dados_aba[~dados_aba["Experimento"].str.contains("Amostra|Experiment|Unit|gotas|mm|l/min", case=False)]
+    
+    # =====================================================
+    # SEPARAÇÃO MATRICIAL DO OIL ID E TREATMENT
+    # =====================================================
+    oil_ids = []
+    tratamentos = []
+    ultimo_oleo = None
+
+    for item in dados_aba["Experimento"]:
+        texto = str(item).strip()
+        
+        # Caso clássico: "3014-Untreated" ou "3015-SSDI-C9500"
+        if "-" in texto:
+            partes = texto.split("-", 1)
+            prefixo = partes[0].strip()
+            sufixo = partes[1].strip()
+            
+            if prefixo.isdigit():
+                ultimo_oleo = int(prefixo)
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append(sufixo)
+            else:
+                # Caso seja um subteste tipo "WJ-45%" ele herda o ID do último óleo lido acima dele
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append(texto)
+        else:
+            # Caso seja apenas o número puro do óleo (ex: "3014")
+            if texto.isdigit():
+                ultimo_oleo = int(texto)
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append("Untreated")
+            else:
+                # Caso seja um nome textual puro sem hífen, herda o último óleo
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append(texto)
+
+    dados_aba["Oil_ID"] = oil_ids
+    dados_aba["Treatment"] = tratamentos
+
+    dados_finais.append(dados_aba)
+
+# =====================================================
+# CONSOLIDAÇÃO DA PLANILHA MASTER
+# =====================================================
+
+if dados_finais:
+    
+    master = pd.concat(dados_finais, ignore_index=True)
+    
+    # Guarda a ordem original de leitura do SINTEF
+    master["Ordem_SINTEF"] = range(len(master))
+
+    # Reorganização das colunas conforme o padrão analítico desejado
+    ordem_colunas = [
+    "Ordem_SINTEF",
+    "Nozzle_Type",
+    "Oil_ID",
+    "Treatment",
+    "Pred_d50_mm",
+    "Meas_d50_mm",
+    "IFT_mN_m",
+    "Nozzle_D_m",
+    "Qoil_L_min",
+    "Qgas_L_min"
+]
+    master = master[ordem_colunas]
+
+    # Força conversão de todas as colunas de engenharia para float numérico
+    colunas_numericas = ["Pred_d50_mm", "Meas_d50_mm", "IFT_mN_m", "Nozzle_D_m", "Qoil_L_min", "Qgas_L_min"]
+    for col in colunas_numericas:
+        master[col] = pd.to_numeric(master[col], errors="coerce")
+
+    # Elimina registros espúrios que falharam na captura do ID do óleo
+    master = master.dropna(subset=["Oil_ID"])
+    master["Oil_ID"] = master["Oil_ID"].astype(int)
+    
+    # Ordenação lógica sequencial por Nozzle -> Óleo -> Tratamento
+    master = master.sort_values(
+    by=["Ordem_SINTEF"]
+).reset_index(drop=True)
+    
+    # Remove coluna auxiliar usada apenas para manter a ordem original
+    master = master.drop(columns=["Ordem_SINTEF"])
+
+    # =====================================================
+    # SALVAMENTO EM MÚLTIPLAS ABAS DE ANÁLISE
+    # =====================================================
+    arquivo_saida = "resultados/SINTEF_Master_Dataset.xlsx"
+
+    with pd.ExcelWriter(arquivo_saida, engine="openpyxl") as writer:
+        master.to_excel(writer, sheet_name="Master", index=False)
+        
+        # Design e usabilidade da planilha gerada
+        ws = writer.sheets["Master"]
+        ws.auto_filter.ref = ws.dimensions
+        ws.freeze_panes = "A2"
+
+        # Abas secundárias automatizadas para resumos dinâmicos e conferência rápida
+        resumo_nozzle = master.groupby("Nozzle_Type").size().reset_index(name="N_Experimentos")
+        resumo_nozzle.to_excel(writer, sheet_name="Resumo_Nozzles", index=False)
+
+        resumo_oleos = pd.DataFrame({"Oil_ID": sorted(master["Oil_ID"].dropna().unique())})
+        resumo_oleos.to_excel(writer, sheet_name="Resumo_Oleos", index=False)
+
+        resumo_tratamentos = pd.DataFrame({"Treatment": sorted(master["Treatment"].dropna().astype(str).unique())})
+        resumo_tratamentos.to_excel(writer, sheet_name="Resumo_Tratamentos", index=False)
+
+    print("\n" + "="*60)
+    print("CONSOLIDAÇÃO CONCLUÍDA COM SUCESSO!")
+    print("="*60)
+    print(f"Total de linhas lidas perfeitamente: {len(master)}")
+    print(f"Planilha Master gerada em: {arquivo_saida}")
+else:
+    print("\n[Erro Crítico] Falha na leitura matricial das abas.")
