@@ -1,0 +1,58 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun 22 11:22:32 2026
+
+@author: 09095340988
+"""
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# ==========================================
+# 1. LEITURA E PREPARAÇÃO DOS DADOS
+# ==========================================
+# Lendo o arquivo CSV
+df = pd.read_csv('2mm all experiments-3014.xlsx - Sheet1.csv')
+
+# Renomeando a primeira coluna para facilitar o uso no código
+df.rename(columns={'Unnamed: 0': 'Tamanho_da_Gota'}, inplace=True)
+
+# Separando o eixo X (gotas) e as colunas dos tratamentos
+tamanho_gota = df['Tamanho_da_Gota']
+tratamentos = df.columns[1:] # Pega todas as colunas a partir da segunda
+
+# ==========================================
+# 2. GERAÇÃO DOS GRÁFICOS (LOOP AUTOMÁTICO)
+# ==========================================
+
+print(f"Gerando gráficos para {len(tratamentos)} tratamentos...\n")
+
+for tratamento in tratamentos:
+    plt.figure(figsize=(8, 5))
+    
+    # Criando a linha de distribuição com a área preenchida embaixo (estilo histograma de curva)
+    plt.fill_between(tamanho_gota, df[tratamento], color='royalblue', alpha=0.4)
+    plt.plot(tamanho_gota, df[tratamento], color='darkblue', linewidth=2)
+    
+    # ⚠️ DETALHE TÉCNICO: Escala logarítmica no eixo X
+    # Essencial para visualizar gotas de 2um a 12.000um de forma clara
+    plt.xscale('log') 
+    
+    # Formatando o visual do gráfico
+    plt.title(f'Distribuição de Gotículas - Tratamento: {tratamento}', fontsize=14, pad=10)
+    plt.xlabel('Tamanho da Gota', fontsize=12)
+    plt.ylabel('Porcentagem (%)', fontsize=12)
+    
+    # Adicionando uma grade de fundo específica para escala logarítmica
+    plt.grid(True, which="both", ls="--", alpha=0.5) 
+    
+    plt.tight_layout()
+    
+    # Exibe o gráfico na tela
+    plt.show()
+    
+    # 💡 Dica: Se quiser que o Python salve todas as imagens automaticamente 
+    # na sua pasta em alta resolução, remova o '#' da linha abaixo:
+    # plt.savefig(f'histograma_distribuicao_{tratamento}.png', dpi=300)
+
+print("✅ Todos os gráficos foram gerados com sucesso!")
