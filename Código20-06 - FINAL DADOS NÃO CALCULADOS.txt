@@ -1,0 +1,296 @@
+# TABELA COM OS VALORES CALCULADOS NAS CELULAS E NÃO CALCULADOS
+
+import pandas as pd
+import openpyxl
+import re
+import os
+
+arquivo_excel = "SINTEF datasheet.xlsx"
+abas = ["Data-3mm", "Data-2mm", "Data-2mm-gas"]
+
+os.makedirs("resultados", exist_ok=True)
+dados_finais = []
+
+# Linha do cabecalho na planilha original (Excel, 1-indexado) -> dados comecam aqui+1
+LINHA_CABECALHO_EXCEL = 11
+
+for aba in abas:
+    print(f"Lendo e tratando aba: {aba}")
+    df = pd.read_excel(arquivo_excel, sheet_name=aba, header=10)
+
+    dados_aba = pd.DataFrame()
+
+    dados_aba["Experimento"] = df.iloc[:, 1]
+
+    # --- RASTREIO DE ORIGEM (novo, nao mexe no resto) ---
+    # Feito DEPOIS que a coluna acima ja deu um indice real ao dataframe,
+    # senao o pandas alinha por indice vazio e tudo vira NaN.
+    # linha Excel = index + 12 (linha 12 = primeira linha de dados)
+    dados_aba["__aba"] = aba
+    dados_aba["__linha_excel"] = df.index + (LINHA_CABECALHO_EXCEL + 1)
+    dados_aba["Pred_d50_mm"] = df.iloc[:, 2]
+    dados_aba["Meas_d50_mm"] = df.iloc[:, 3]
+    dados_aba["IFT_mN_m"]    = df.iloc[:, 4]
+    dados_aba["Nozzle_D_m"]  = df.iloc[:, 5]
+    dados_aba["Qoil_L_min"]  = df.iloc[:, 6]
+    dados_aba["Qgas_L_min"]  = df.iloc[:, 7]
+
+    dados_aba["Momentum_Flux_Oil"]       = df.iloc[:, 8]
+    dados_aba["Momentum_Flux_Water"]     = df.iloc[:, 9]
+    dados_aba["Momentum_Flux_Amp"]       = df.iloc[:, 10]
+    dados_aba["Reduction_Factor_dR"]     = df.iloc[:, 11]
+    dados_aba["Oil_Visc_mPas"]           = df.iloc[:, 12]
+    dados_aba["Gas_Void_Fraction"]       = df.iloc[:, 13]
+    dados_aba["Gas_Density_kg_m3"]       = df.iloc[:, 14]
+    dados_aba["Oil_Density_Kg_L"]        = df.iloc[:, 15]
+    dados_aba["Fluid_Density_Kg_m3"]     = df.iloc[:, 16]
+    dados_aba["Mixed_Density_Kg_m3"]     = df.iloc[:, 17]
+    dados_aba["Volumetric_Velocity_U"]   = df.iloc[:, 18]
+    dados_aba["Modified_Velocity_U_line"] = df.iloc[:, 19]
+    dados_aba["Gred_m2_s"]               = df.iloc[:, 20]
+    dados_aba["Fr"]                      = df.iloc[:, 21]
+    dados_aba["Ue"]                      = df.iloc[:, 22]
+    dados_aba["Re"]                      = df.iloc[:, 23]
+    dados_aba["We"]                      = df.iloc[:, 24]
+    dados_aba["Vi"]                      = df.iloc[:, 25]
+    dados_aba["Modified_We"]             = df.iloc[:, 26]
+    dados_aba["d50_D_Pred"]              = df.iloc[:, 27]
+    dados_aba["d50_D_We"]                = df.iloc[:, 28]
+    dados_aba["Iter_1"]                  = df.iloc[:, 29]
+    dados_aba["Iter_2"]                  = df.iloc[:, 30]
+    dados_aba["Iter_3"]                  = df.iloc[:, 31]
+    dados_aba["Iter_4"]                  = df.iloc[:, 32]
+    dados_aba["Iter_5"]                  = df.iloc[:, 33]
+
+    if aba == "Data-3mm":
+        dados_aba["Nozzle_Type"] = "3 mm"
+    elif aba == "Data-2mm":
+        dados_aba["Nozzle_Type"] = "2 mm"
+    elif aba == "Data-2mm-gas":
+        dados_aba["Nozzle_Type"] = "2 mm + gas"
+
+    dados_aba["Pred_d50_mm"] = pd.to_numeric(dados_aba["Pred_d50_mm"], errors="coerce")
+    dados_aba["Meas_d50_mm"] = pd.to_numeric(dados_aba["Meas_d50_mm"], errors="coerce")
+    dados_aba = dados_aba.dropna(subset=["Pred_d50_mm", "Meas_d50_mm"])
+    dados_aba = dados_aba[(dados_aba["Pred_d50_mm"] > 0) & (dados_aba["Meas_d50_mm"] > 0)]
+
+    dados_aba["Experimento"] = dados_aba["Experimento"].astype(str).str.strip()
+    dados_aba = dados_aba[(dados_aba["Experimento"] != "") & (dados_aba["Experimento"] != "nan")]
+    dados_aba = dados_aba[~dados_aba["Experimento"].str.contains("Amostra|Experiment|Unit|gotas|mm|l/min", case=False)]
+
+    oil_ids = []
+    tratamentos = []
+    ultimo_oleo = None
+    for item in dados_aba["Experimento"]:
+        texto = str(item).strip()
+        if "-" in texto:
+            partes = texto.split("-", 1)
+            prefixo = partes[0].strip()
+            sufixo = partes[1].strip()
+            if prefixo.isdigit():
+                ultimo_oleo = int(prefixo)
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append(sufixo)
+            else:
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append(texto)
+        else:
+            if texto.isdigit():
+                ultimo_oleo = int(texto)
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append("Untreated")
+            else:
+                oil_ids.append(ultimo_oleo)
+                tratamentos.append(texto)
+
+    dados_aba["Oil_ID"] = oil_ids
+    dados_aba["Treatment"] = tratamentos
+
+    dados_finais.append(dados_aba)
+
+master = pd.concat(dados_finais, ignore_index=True)
+master["Ordem_SINTEF"] = range(len(master))
+
+ordem_colunas = [
+    "Ordem_SINTEF", "Nozzle_Type", "Oil_ID", "Treatment",
+    "Pred_d50_mm", "Meas_d50_mm", "IFT_mN_m", "Nozzle_D_m", "Qoil_L_min", "Qgas_L_min",
+    "Momentum_Flux_Oil", "Momentum_Flux_Water", "Momentum_Flux_Amp", "Reduction_Factor_dR",
+    "Oil_Visc_mPas", "Gas_Void_Fraction", "Gas_Density_kg_m3", "Oil_Density_Kg_L",
+    "Fluid_Density_Kg_m3", "Mixed_Density_Kg_m3", "Volumetric_Velocity_U", "Modified_Velocity_U_line",
+    "Gred_m2_s", "Fr", "Ue", "Re", "We", "Vi", "Modified_We", "d50_D_Pred", "d50_D_We",
+    "Iter_1", "Iter_2", "Iter_3", "Iter_4", "Iter_5",
+    "__aba", "__linha_excel",   # mantidas ate o fim, removidas so na hora de salvar
+]
+master = master[ordem_colunas]
+
+colunas_numericas = [
+    "Pred_d50_mm", "Meas_d50_mm", "IFT_mN_m", "Nozzle_D_m", "Qoil_L_min", "Qgas_L_min",
+    "Momentum_Flux_Oil", "Momentum_Flux_Water", "Momentum_Flux_Amp", "Reduction_Factor_dR",
+    "Oil_Visc_mPas", "Gas_Void_Fraction", "Gas_Density_kg_m3", "Oil_Density_Kg_L",
+    "Fluid_Density_Kg_m3", "Mixed_Density_Kg_m3", "Volumetric_Velocity_U", "Modified_Velocity_U_line",
+    "Gred_m2_s", "Fr", "Ue", "Re", "We", "Vi", "Modified_We", "d50_D_Pred", "d50_D_We",
+    "Iter_1", "Iter_2", "Iter_3", "Iter_4", "Iter_5",
+]
+for col in colunas_numericas:
+    master[col] = pd.to_numeric(master[col], errors="coerce")
+
+master = master.dropna(subset=["Oil_ID"])
+master["Oil_ID"] = master["Oil_ID"].astype(int)
+master = master.sort_values(by=["Ordem_SINTEF"]).reset_index(drop=True)
+master = master.drop(columns=["Ordem_SINTEF"])
+
+# Guarda o mapa de origem antes de tirar as colunas auxiliares da master "publica"
+origem = master[["__aba", "__linha_excel"]].copy()
+master_pub = master.drop(columns=["__aba", "__linha_excel"])
+
+arquivo_saida = "resultados/SINTEF_Master_Dataset.xlsx"
+
+with pd.ExcelWriter(arquivo_saida, engine="openpyxl") as writer:
+    master_pub.to_excel(writer, sheet_name="Master", index=False)
+    ws = writer.sheets["Master"]
+    ws.auto_filter.ref = ws.dimensions
+    ws.freeze_panes = "A2"
+
+    resumo_nozzle = master_pub.groupby("Nozzle_Type").size().reset_index(name="N_Experimentos")
+    resumo_nozzle.to_excel(writer, sheet_name="Resumo_Nozzles", index=False)
+
+    resumo_oleos = pd.DataFrame({"Oil_ID": sorted(master_pub["Oil_ID"].dropna().unique())})
+    resumo_oleos.to_excel(writer, sheet_name="Resumo_Oleos", index=False)
+
+    resumo_tratamentos = pd.DataFrame({"Treatment": sorted(master_pub["Treatment"].dropna().astype(str).unique())})
+    resumo_tratamentos.to_excel(writer, sheet_name="Resumo_Tratamentos", index=False)
+
+print(f"Total de linhas: {len(master_pub)} -> {arquivo_saida} (valores, etapa 1 concluida)")
+
+# =====================================================================
+# ETAPA 2 - INJECAO DE FORMULAS REAIS NAS CELULAS CALCULADAS
+# =====================================================================
+
+# Coluna original (na aba SINTEF) -> nome da coluna na Master
+ORIG_PARA_NOME = {
+    'C':'Pred_d50_mm','D':'Meas_d50_mm','E':'IFT_mN_m','F':'Nozzle_D_m',
+    'G':'Qoil_L_min','H':'Qgas_L_min','I':'Momentum_Flux_Oil','J':'Momentum_Flux_Water',
+    'K':'Momentum_Flux_Amp','L':'Reduction_Factor_dR','M':'Oil_Visc_mPas','N':'Gas_Void_Fraction',
+    'O':'Gas_Density_kg_m3','P':'Oil_Density_Kg_L','Q':'Fluid_Density_Kg_m3','R':'Mixed_Density_Kg_m3',
+    'S':'Volumetric_Velocity_U','T':'Modified_Velocity_U_line','U':'Gred_m2_s','V':'Fr','W':'Ue',
+    'X':'Re','Y':'We','Z':'Vi','AA':'Modified_We','AB':'d50_D_Pred','AC':'d50_D_We',
+    'AD':'Iter_1','AE':'Iter_2','AF':'Iter_3','AG':'Iter_4','AH':'Iter_5',
+}
+# Colunas que possuem fórmulas na planilha original
+# Incluindo Momentum_Flux_Oil, Momentum_Flux_Water,
+# Momentum_Flux_Amp e Reduction_Factor_dR (I:L)
+COLUNAS_COM_FORMULA = [
+    'C',
+    'I', 'J', 'K', 'L',
+    'M', 'N', 'O', 'P', 'Q', 'R',
+    'S', 'T', 'U', 'V', 'W', 'X',
+    'Y', 'Z', 'AA', 'AB', 'AC',
+    'AD', 'AE', 'AF', 'AG', 'AH'
+]
+
+# Nome da coluna Master -> letra da coluna Master (1-indexada, calculada na hora)
+colunas_master = list(master_pub.columns)
+NOME_PARA_COL_MASTER = {nome: openpyxl.utils.get_column_letter(i + 1)
+                         for i, nome in enumerate(colunas_master)}
+
+# Mapa (aba, linha_excel_original) -> linha na planilha Master (1-indexada, +1 por causa do cabecalho)
+mapa_linha = {}
+for i, row in origem.iterrows():
+    mapa_linha[(row["__aba"], int(row["__linha_excel"]))] = i + 2  # +2: header na linha1, dados comecam na 2
+
+wb_origem = openpyxl.load_workbook(arquivo_excel, data_only=False)
+wb_saida = openpyxl.load_workbook(arquivo_saida)
+ws_master = wb_saida["Master"]
+
+# Regex para encontrar referencias de celula tipo $AB$12, AB12, Z12 etc.
+RE_CELL = re.compile(r'(\$?)([A-Z]{1,2})(\$?)(\d+)')
+
+def traduzir_formula(formula, aba_origem):
+    """Troca toda referencia de celula da aba original pela referencia
+    equivalente na planilha Master. Se a celula referenciada nao sobreviveu
+    ao filtro (linha removida), substitui pelo VALOR calculado em cache
+    (fallback seguro, evita formula quebrada / #REF!)."""
+    def repl(m):
+        cifrao1, col, cifrao2, lin = m.group(1), m.group(2), m.group(3), int(m.group(4))
+        if col not in ORIG_PARA_NOME:
+            # referencia a coluna fora do nosso dicionario (ex: A=desvio) -> mantem como esta nao e seguro
+            return m.group(0)
+        chave = (aba_origem, lin)
+        if chave in mapa_linha:
+            nome_col = ORIG_PARA_NOME[col]
+            col_master = NOME_PARA_COL_MASTER.get(nome_col)
+            linha_master = mapa_linha[chave]
+            if col_master:
+                return f"{cifrao1}{col_master}{cifrao2}{linha_master}"
+        # fallback: linha filtrada fora (nao sobreviveu) -> usa valor em cache
+        ws_cache = wb_cache_por_aba[aba_origem]
+        valor = ws_cache[f"{col}{lin}"].value
+        if valor is None:
+            return "0"
+        return str(valor)
+    return RE_CELL.sub(repl, formula)
+
+# workbook com valores em cache (data_only=True) para os fallbacks
+wb_cache = openpyxl.load_workbook(
+    arquivo_excel,
+    data_only=True
+)
+
+wb_cache_por_aba = {
+    aba: wb_cache[aba]
+    for aba in abas
+}
+
+celulas_escritas = 0
+celulas_vazias_na_origem = 0
+for (aba, linha_excel), linha_master in mapa_linha.items():
+    ws_o = wb_origem[aba]
+    for col in COLUNAS_COM_FORMULA:
+        cel_o = ws_o[f"{col}{linha_excel}"]
+        nome_col = ORIG_PARA_NOME[col]
+        col_master = NOME_PARA_COL_MASTER[nome_col]
+        destino = ws_master[f"{col_master}{linha_master}"]
+        if cel_o.value is None:
+            celulas_vazias_na_origem += 1
+            continue
+        if isinstance(cel_o.value, str) and cel_o.value.startswith("="):
+            nova_formula = traduzir_formula(cel_o.value, aba)
+            destino.value = nova_formula
+        else:
+            destino.value = cel_o.value
+        celulas_escritas += 1
+
+# =====================================================================
+# Copia a aba Parameters + nomes definidos (named ranges) para o arquivo
+# de saida, para que dens_gas, Qfac, g, row, Afac, Bfac funcionem de
+# verdade ao clicar na celula.
+# =====================================================================
+if "Parameters" in wb_origem.sheetnames and "Parameters" not in wb_saida.sheetnames:
+    src = wb_origem["Parameters"]
+    dst = wb_saida.create_sheet("Parameters")
+    for row in src.iter_rows():
+        for cell in row:
+            if cell.value is not None:
+                dst[cell.coordinate] = cell.value
+
+nomes_usados = {
+    "dens_gas",
+    "Qfac",
+    "g",
+    "row",
+    "row__freshwater",
+    "Afac",
+    "Bfac",
+    "z"
+}
+for nome in nomes_usados:
+    if nome in wb_origem.defined_names and nome not in wb_saida.defined_names:
+        dn = wb_origem.defined_names[nome]
+        if "Parameters" in dn.attr_text:  # so copia os que realmente resolvem
+            novo = openpyxl.workbook.defined_name.DefinedName(nome, attr_text=dn.attr_text)
+            wb_saida.defined_names[nome] = novo
+
+wb_saida.save(arquivo_saida)
+
+print(f"Formulas escritas: {celulas_escritas} | celulas vazias na origem (mantidas vazias): {celulas_vazias_na_origem}")
+print("Etapa 2 concluida - SINTEF_Master_Dataset.xlsx agora tem formulas vivas.")
